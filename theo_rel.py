@@ -102,8 +102,6 @@ def prob_r(R, R_prime, L, m_f):
 def prob(L, R, L_new, R_new, m_f, t, t0):
     return prob_r(R, R_new, L, m_f)*prob_l(L, L_new, t, t0)
 
-
-
 def successProbability(t0, t, L, R, m_f): # t is the time step, L and R are the initial arrays
     # Base case: when t is 0
     if t == 0:
