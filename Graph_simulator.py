@@ -6,17 +6,36 @@ from itertools import product
 import numpy as np
 import math
 import theo_rel
+import threading
+from threading import Thread
+from multiprocessing import Process, Manager
+
 
 # Initialize Pygame
 pygame.init()
 
 # Set up the screen
-WIDTH, HEIGHT = 800, 600
-screen_width = 800
+WIDTH = 1000
+HEIGHT = 600
+screen_width = 1000
 screen_height = 600
+right_screen_width = 380
+screen = pygame.display.set_mode((screen_width, screen_height))
+pause_button_rect = pygame.Rect(20, screen_height - 180, 80, 40)
+play_button_rect = pygame.Rect(115, screen_height - 180, 100, 40)
+middle_button_text = "Play"
+reset_button_rect = pygame.Rect(235, screen_height - 180, 80, 40)
+
+
 trials = 1
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Real-time Simulation Graph")
+
+pygame.display.set_caption("Simulation Graph")
+
+
+static_rect = pygame.Rect(right_screen_width, 0, screen_width - right_screen_width, screen_height)
+captured_static_rect = screen.subsurface(static_rect).copy() 
+
+pause = False
 
 # Colors
 WHITE = (255, 255, 255)
@@ -25,9 +44,12 @@ BLUE = (0, 0, 255)
 GRAY = (200, 200, 200)
 RED = (255, 0, 0)
 GREEN = (0, 255, 0)
+LIGHT_RED = (255, 153, 153)
+LIGHT_GREEN = (150, 249, 124)
 
 # Fonts
 font = pygame.font.SysFont(None, 32)
+
 
 # Variable names
 n_s = None
@@ -35,6 +57,7 @@ n_d = None
 v_d = None
 R_min = None
 R_c = None
+R_det = None
 r = None
 l = None
 m_f = None
@@ -42,27 +65,46 @@ alpha = None
 S = None
 C = None
 
-
+computed_reliability = None
+steps = 0
 
 # Parameters
-
 parameters = {
-    "Number of ADS": "2",
-    "Number of Drones": "5",
-    "Velocity of Drone": "3",
+    "Number of ADS": "1",
+    "Number of Drones": "2",
+    "Velocity of Drone (m/(10*sec))": "3",
     "Min Allowed Proximity for Drone": "10",
-    "Critical Region": "200",
-    "Hits to kill a Drone": "3",
+    "Critical Region (m/10)": "200",
+    "Detection Region (m/10)": "300",
+    "Successful Hits to kill a Drone": "3",
     "Lasers in one ADS": "2",
     "Failure Probability of a strike": "0.25",
     "Max Strikes before ADS requires Cool-down": "6",
-    "Strike Time": "10",
-    "Cooldown Time": "240"
+    "Strike Time (sec)": "10",
+    "Cooldown Time (sec)": "240"
 }
 
 # Input fields
 input_fields = {}
 active_field = ""
+
+# class MyThread(threading.Thread):
+#     def __init__(self):
+#         threading.Thread.__init__(self)
+#         self.stopped = threading.Event()
+
+#     def stop(self):
+#         self.stopped.set()
+        
+#     def run(self):
+#         while not self.stopped.is_set():
+#             global computed_reliability
+#             L = [l for _ in range(n_s)]
+#             R = [r for _ in range(n_d)]
+#             theo_rel.successdp.clear()
+#             theo_rel.prob_r_dp.clear()
+#             if computed_reliability is None:
+#                 computed_reliability = theo_rel.successProbability(t0(S,alpha, C, v_d, R_min, R_c), t0(S,alpha, C, v_d, R_min, R_c),L, R ,m_f ) 
 
 def draw_text_input(x, y, label, value, active):
     text_surface = font.render(label, True, BLACK)
@@ -88,62 +130,103 @@ def draw_ui():
 
 def update_variables():
     global n_s, n_d, v_d, R_min, R_c, R_det, r, l, m_f, alpha, S, C
-    flag = True
+    flag = 0
     try:
-        n_s = int(parameters["Number of ADS"])
+        C = int(parameters["Cooldown Time (sec)"])
+        if C <= 0:
+            raise ValueError("Cooldown Time must be a positive integer.")
     except ValueError:
-        flag = False
-        print("Invalid input for Number of ADS. Please enter a valid numerical value.")
+        flag = -12
+        print("Invalid input for Cooldown Time (sec). Please enter a valid numerical value.")
+
     try:
-        n_d = int(parameters["Number of Drones"])
+        S = int(parameters["Strike Time (sec)"])
+        if S <= 0:
+            raise ValueError("Strike Time must be a positive integer.")
     except ValueError:
-        flag = False
-        print("Invalid input for Number of Drones. Please enter a valid numerical value.")
-    try:
-        v_d = float(parameters["Velocity of Drone"])
-    except ValueError:
-        flag = False
-        print("Invalid input for Velocity of Drone. Please enter a valid numerical value.")
-    try:
-        R_min = int(parameters["Min Allowed Proximity for Drone"])
-    except ValueError:
-        flag = False
-        print("Invalid input for Min Allowed Proximity for Drone. Please enter a valid numerical value.")
-    try:
-        R_c = int(parameters["Critical Region"])
-    except ValueError:
-        flag = False
-        print("Invalid input for Critical Region. Please enter a valid numerical value.")
-    try:
-        r = int(parameters["Hits to kill a Drone"])
-    except ValueError:
-        flag = False
-        print("Invalid input for Hits to kill a Drone. Please enter a valid numerical value.")
-    try:
-        l = int(parameters["Lasers in one ADS"])
-    except ValueError:
-        flag = False
-        print("Invalid input for Lasers in one ADS. Please enter a valid numerical value.")
-    try:
-        m_f = float(parameters["Failure Probability of a strike"])
-    except ValueError:
-        flag = False
-        print("Invalid input for Failure Probability of a strike. Please enter a valid numerical value.")
+        flag = -11
+        print("Invalid input for Strike Time (sec). Please enter a valid numerical value.")
+
     try:
         alpha = int(parameters["Max Strikes before ADS requires Cool-down"])
+        if alpha <= 0:
+            raise ValueError("Max Strikes before ADS requires Cool-down must be a positive integer.")
     except ValueError:
-        flag = False
+        flag = -10
         print("Invalid input for Max Strikes before ADS requires Cool-down. Please enter a valid numerical value.")
+
     try:
-        S = int(parameters["Strike Time"])
+        m_f = float(parameters["Failure Probability of a strike"])
+        if m_f < 0 or m_f > 1:
+            raise ValueError("Failure Probability of a strike must be a float between 0 and 1.")
     except ValueError:
-        flag = False
-        print("Invalid input for Strike Time. Please enter a valid numerical value.")
+        flag = -9
+        print("Invalid input for Failure Probability of a strike. Please enter a valid numerical value.")
+
     try:
-        C = int(parameters["Cooldown Time"])
+        l = int(parameters["Lasers in one ADS"])
+        if l <= 0:
+            raise ValueError("Lasers in one ADS must be a positive integer.")
     except ValueError:
-        flag = False
-        print("Invalid input for Cooldown Time. Please enter a valid numerical value.")
+        flag = -8
+        print("Invalid input for Lasers in one ADS. Please enter a valid numerical value.")
+
+    try:
+        r = int(parameters["Successful Hits to kill a Drone"])
+        if r <= 0:
+            raise ValueError("Hits to kill a Drone must be a positive integer.")
+    except ValueError:
+        flag = -7
+        print("Invalid input for Hits to kill a Drone. Please enter a valid numerical value.")
+
+    try:
+        R_det = float(parameters["Detection Region (m/10)"])
+        if R_det < 0:
+            raise ValueError("Detection Region must be a non-negative float.")
+    except ValueError:
+        flag = -6
+        print("Invalid input for Detection Region (m/10). Please enter a valid numerical value.")
+
+    try:
+        R_c = float(parameters["Critical Region (m/10)"])
+        if R_c < 0:
+            raise ValueError("Critical Region must be a non-negative float.")
+    except ValueError:
+        flag = -5
+        print("Invalid input for Critical Region (m/10). Please enter a valid numerical value.")
+
+    try:
+        R_min = float(parameters["Min Allowed Proximity for Drone"])
+        if R_min < 0:
+            raise ValueError("Min Allowed Proximity for Drone must be a non-negative float.")
+    except ValueError:
+        flag = -4
+        print("Invalid input for Min Allowed Proximity for Drone. Please enter a valid numerical value.")
+
+    try:
+        v_d = float(parameters["Velocity of Drone (m/(10*sec))"])
+        if v_d <= 0:
+            raise ValueError("Velocity of Drone must be a positive float.")
+    except ValueError:
+        flag = -3
+        print("Invalid input for Velocity of Drone (m/(10*sec)). Please enter a valid numerical value.")
+
+    try:
+        n_d = int(parameters["Number of Drones"])
+        if n_d < 0:
+            raise ValueError("Number of Drones must be a positive integer.")
+    except ValueError:
+        flag = -2
+        print("Invalid input for Number of Drones. Please enter a valid numerical value.")
+
+    try:
+        n_s = int(parameters["Number of ADS"])
+        if n_s <= 0:
+            raise ValueError("Number of ADS must be a positive integer.")
+    except ValueError:
+        flag = -1
+        print("Invalid input for Number of ADS. Please enter a valid numerical value.")
+
     return flag
     
 def print_variables():
@@ -152,6 +235,7 @@ def print_variables():
     print("v_d:", v_d)
     print("R_min:", R_min)
     print("R_c:", R_c)
+    print("R_det:", R_det)
     print("r:", r)
     print("l:", l)
     print("m_f:", m_f)
@@ -184,36 +268,160 @@ def handle_events():
                 else:
                     parameters[active_field] += event.unicode
 
+def handle_events_new():
+    global active_field
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            pygame.quit()
+            sys.exit()
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            mouse_pos = pygame.mouse.get_pos()
+            print(mouse_pos)
+            for key, value in parameters.items():
+                rect = pygame.Rect(315, 15 + 33 * list(parameters.keys()).index(key), 50, 23)
+                if rect.collidepoint(mouse_pos):
+                    active_field = key
+                    print("Activated = " + active_field)
+            if play_button_rect.collidepoint(mouse_pos):
+                flag = update_variables()
+                print_variables()
+                return errorHandle(flag)
+                # return (flag == 0)
 
-def welcome_screen():
+        if event.type == pygame.KEYDOWN:
+            if active_field:
+                if event.key == pygame.K_RETURN:
+                    active_field = ""
+                elif event.key == pygame.K_BACKSPACE:
+                    parameters[active_field] = parameters[active_field][:-1]
+                    print("Params = " + parameters[active_field])
+                else:
+                    parameters[active_field] += event.unicode
+                    print("Params = " + parameters[active_field])
+
+def errorHandle(flag):
+    if ( flag == 0 ):
+        return True
+    
+    y_offset = 15
+    font = pygame.font.Font(None, 20)
+    err_button_text = font.render("Error in input format!", True, WHITE)
+
+    add_offset = (flag+1)*-1 *34
+
+
+    pygame.draw.rect(screen, LIGHT_RED, (390, y_offset+add_offset, 150, 23))
+    screen.blit(err_button_text, (400, y_offset + add_offset+ 5))
+    pygame.display.flip()
+    pygame.time.wait(3000)
+
+    return False
+
+def draw_ui2():
+    global middle_button_text
     screen.fill(WHITE)
-    font = pygame.font.Font(None, 36)
-    text = font.render("Welcome to the graph simulation", True, BLACK)
-    text_rect = text.get_rect(center=(screen_width // 2, screen_height // 2 - 50))
-    screen.blit(text, text_rect)
-
-    continue_button = pygame.Rect(screen_width // 2 - 100, screen_height // 2, 200, 50)
-    pygame.draw.rect(screen, GREEN, continue_button)
+    font = pygame.font.Font(None, 20)
+    
+    text_y = 20  # Initial y-coordinate
+    for key, value in parameters.items():
+        key_surface = font.render(f"{key}:", True, BLACK)
+        value_surface = font.render(value, True, BLACK)
+        
+        key_width, key_height = key_surface.get_size()
+        value_width, value_height = value_surface.get_size()
+        
+        key_x = 20
+        key_y = text_y
+        screen.blit(key_surface, (key_x, key_y))
+        
+        value_x = key_x + 300
+        value_y = text_y
+        screen.blit(value_surface, (value_x, value_y))
+        
+        # Calculate the position and size of the rectangular box around the value
+        box_x = value_x - 5  # Adjust the left margin as needed
+        box_y = value_y - 5
+        box_width = 50  # Adjust the width padding as needed
+        box_height = value_height + 10  # Adjust the height padding as needed
+        
+        # Draw the rectangular box with a white border
+        pygame.draw.rect(screen, BLACK, (box_x, box_y, box_width, box_height), 2)
+        if ( key == active_field ):
+            pygame.draw.rect(screen, RED, (box_x, box_y, box_width, box_height), 2)
+        
+        # Increment y-coordinate for the next line
+        text_y += max(key_height, value_height) + 20  # Adjust the vertical spacing as needed
+    
+    pygame.draw.rect(screen, WHITE, pause_button_rect)
+    pygame.draw.rect(screen, BLACK, pause_button_rect, 2)
+    pygame.draw.rect(screen, WHITE, play_button_rect)
+    pygame.draw.rect(screen, BLACK, play_button_rect, 2)
+    pygame.draw.rect(screen, WHITE, reset_button_rect)
+    pygame.draw.rect(screen, BLACK, reset_button_rect, 2)
 
     font = pygame.font.Font(None, 30)
-    text = font.render("Continue", True, BLACK)
-    text_rect = text.get_rect(center=continue_button.center)
-    screen.blit(text, text_rect)
+    pause_text = font.render("Pause", True, BLACK)
+    screen.blit(pause_text, (30, screen_height - 170))
+    play_text = font.render(middle_button_text, True, BLACK)
+    screen.blit(play_text, (125, screen_height - 170))
+    reset_text = font.render("Reset", True, BLACK)
+    screen.blit(reset_text, (245, screen_height - 170))
+
+def draw_environment():
+    global middle_button_text
+    # screen.fill((135, 206, 250))
+    
+    pygame.draw.rect(screen, WHITE, (0, 0, right_screen_width, screen_height))
+
+    font = pygame.font.Font(None, 20)
+    
+    text_y = 20  # Initial y-coordinate
+    for key, value in parameters.items():
+        key_surface = font.render(f"{key}:", True, BLACK)
+        value_surface = font.render(value, True, BLACK)
+        
+        key_width, key_height = key_surface.get_size()
+        value_width, value_height = value_surface.get_size()
+        
+        key_x = 20
+        key_y = text_y
+        screen.blit(key_surface, (key_x, key_y))
+        
+        value_x = key_x + 300
+        value_y = text_y
+        screen.blit(value_surface, (value_x, value_y))
+        
+        # Calculate the position and size of the rectangular box around the value
+        box_x = value_x - 5  # Adjust the left margin as needed
+        box_y = value_y - 5
+        box_width = 50  # Adjust the width padding as needed
+        box_height = value_height + 10  # Adjust the height padding as needed
+
+        # print(key, value, key_x, key_y, value_x, value_y, box_x, box_y, box_width, box_height)
+        
+        # Draw the rectangular box with a white border
+        pygame.draw.rect(screen, BLACK, (box_x, box_y, box_width, box_height), 2)
+        
+        # Increment y-coordinate for the next line
+        text_y += max(key_height, value_height) + 20  # Adjust the vertical spacing as needed
+    
+    pygame.draw.rect(screen, WHITE, pause_button_rect)
+    pygame.draw.rect(screen, BLACK, pause_button_rect, 2)
+    pygame.draw.rect(screen, WHITE, play_button_rect)
+    pygame.draw.rect(screen, BLACK, play_button_rect, 2)
+    pygame.draw.rect(screen, WHITE, reset_button_rect)
+    pygame.draw.rect(screen, BLACK, reset_button_rect, 2)
+
+    middle_button_text = "Play"
+    font = pygame.font.Font(None, 30)
+    pause_text = font.render("Pause", True, BLACK)
+    screen.blit(pause_text, (30, screen_height - 170))
+    play_text = font.render(middle_button_text, True, BLACK)
+    screen.blit(play_text, (125, screen_height - 170))
+    reset_text = font.render("Reset", True, BLACK)
+    screen.blit(reset_text, (245, screen_height - 170))
 
     pygame.display.flip()
-
-    while True:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit()
-                sys.exit()
-            elif event.type == pygame.MOUSEBUTTONDOWN:
-                if continue_button.collidepoint(event.pos):
-                    return
-
-
-
-
 
 def f(num_strikes_till_now, param = 0.005, a = 999):
     return 1/(1+a*math.exp(-param*num_strikes_till_now))
@@ -259,96 +467,185 @@ def simulator(L, R, m_f, t, t0):
 def t0(S, alpha, C, v_d, R_min, R_c):
     tc = (R_c - R_min)/v_d
     return alpha*math.floor(tc/(S*alpha + C)) + min(math.floor(tc%(S*alpha + C)/S), alpha)
-# Function generator
-def generate_values():
-    while True:
-        yield initializer(trials, n_s, n_d, l, r, m_f, t0(S, alpha, C, v_d, R_min, R_c))  # Replace this with your own function to generate values
 
-# Main function to draw the graph
-def draw_graph(values, current_value, constant_value, horizontal_line_value):
-    screen.fill(WHITE)  # Clear the screen
+def calculate_theoretical_reliability():
+    global computed_reliability
+    
+    
+    
+    # C = int(shared_dict["Cooldown Time (sec)"])
+    # S = int(shared_dict["Strike Time (sec)"])
+    # alpha = int(shared_dict["Max Strikes before ADS requires Cool-down"])
+    # m_f = float(shared_dict["Failure Probability of a strike"])
+    # l = int(shared_dict["Lasers in one ADS"])
+    # r = int(shared_dict["Successful Hits to kill a Drone"])
+    # R_det = float(shared_dict["Detection Region (m/10)"])
+    # R_c = float(shared_dict["Critical Region (m/10)"])
+    # R_min = float(shared_dict["Min Allowed Proximity for Drone"])
+    # v_d = float(shared_dict["Velocity of Drone (m/(10*sec))"])
+    # n_d = int(shared_dict["Number of Drones"])
+    # n_s = int(shared_dict["Number of ADS"])
+    
 
-    # Draw box for the graph
-    graph_box_height = HEIGHT * 2 // 3
-    graph_box_rect = pygame.Rect(0, HEIGHT - graph_box_height, WIDTH, graph_box_height)
-    pygame.draw.rect(screen, GRAY, graph_box_rect)
-
-    # Draw X-axis
-    pygame.draw.line(screen, BLACK, (0, HEIGHT*(9/10)), (WIDTH, HEIGHT *(9/10)), 2)
-    # Draw Y-axis
-    pygame.draw.line(screen, BLACK, (WIDTH*(1/10) + 40, HEIGHT * 1 // 3), (WIDTH *(1/10) + 40, HEIGHT), 2)
-
-    # Draw the graph using the values
-    for i in range(len(values) - 1):
-        pygame.draw.line(screen, BLUE, (i+121, HEIGHT - values[i]), (i + 122, HEIGHT - values[i + 1]), 2)
-
-    # Draw horizontal line with specific value
-    pygame.draw.line(screen, RED, (WIDTH*(1/10) + 40, HEIGHT - horizontal_line_value), (WIDTH, HEIGHT - horizontal_line_value), 2)
-
-    # Draw labels for axes
-    font = pygame.font.SysFont("timesnewroman", 20)
-    text = font.render("Time", True, BLACK)
-    text_rect = text.get_rect(center=(WIDTH // 2, HEIGHT - 40))
-    screen.blit(text, text_rect)
-    text = font.render("Reliability", True, BLACK)
-    text_rect = text.get_rect(center=(65, HEIGHT* 1//3 + 80))
-    screen.blit(text, text_rect)
-
-    # Draw boxes for current and constant values
-    value_box_height = HEIGHT // 12
-    current_value_rect = pygame.Rect(30, 10, 340, value_box_height)
-    constant_value_rect = pygame.Rect(430, 10, 340, value_box_height)
-    pygame.draw.rect(screen, GRAY, current_value_rect)
-    pygame.draw.rect(screen, GRAY, constant_value_rect)
-
-    # Draw text for current and constant values
-    font = pygame.font.SysFont("timesnewroman", 22)
-    text = font.render(f"Simulated Reliability: {current_value : .6f}", True, BLACK)
-    text_rect = text.get_rect(center=(200, 10 + value_box_height // 2))
-    screen.blit(text, text_rect)
-    text = font.render(f"Theoretical Reliability: {constant_value : .6f}", True, BLACK)
-    text_rect = text.get_rect(center=(600, 10 + value_box_height // 2))
-    screen.blit(text, text_rect)
-
-    pygame.display.flip()  # Update the display
-
-# Main loop
-def main():
-    welcome_screen()
-    run = True
-    while run:
-        run = not handle_events()
-        draw_ui()
-        pygame.display.flip()
-    values_generator = generate_values()
-    values = []  
-    steps = 0 
-    current_value = 0
+    print("Calculating Theoretical Reliability")
     L = [l for _ in range(n_s)]
     R = [r for _ in range(n_d)]
     theo_rel.successdp.clear()
     theo_rel.prob_r_dp.clear()
-    constant_value = theo_rel.successProbability(t0(S,alpha, C, v_d, R_min, R_c), t0(S,alpha, C, v_d, R_min, R_c),L, R ,m_f )  # Set your constant value here
-    horizontal_line_value = 240*constant_value + 60  # Set your horizontal line value here
-    clock = pygame.time.Clock()
+    computed_reliability = theo_rel.successProbability(t0(S,alpha, C, v_d, R_min, R_c), t0(S,alpha, C, v_d, R_min, R_c),L, R ,m_f )  # Set your constant value here
+    print("Theoretical Reliability:", computed_reliability)
 
+        
+        
+def get_theoretical_reliability():
+    global computed_reliability
+    if computed_reliability is None:
+        calculate_theoretical_reliability()
+    return computed_reliability
+
+def generate_values():
     while True:
+        yield initializer(trials, n_s, n_d, l, r, m_f, t0(S, alpha, C, v_d, R_min, R_c))  # Replace this with your own function to generate values
+
+def draw_graph(values, current_value):
+    # Draw box for the graph
+    graph_box_height = HEIGHT * 2 // 3
+    graph_box_rect = pygame.Rect(right_screen_width, HEIGHT - graph_box_height, WIDTH - right_screen_width, graph_box_height)
+    pygame.draw.rect(screen, GRAY, graph_box_rect)
+
+    # Draw X-axis
+    pygame.draw.line(screen, BLACK, (right_screen_width, HEIGHT*(9/10)), (WIDTH, HEIGHT *(9/10)), 2)
+    # Draw Y-axis
+    pygame.draw.line(screen, BLACK, (right_screen_width + 40, HEIGHT * 1 // 3), (right_screen_width + 40, HEIGHT), 2)
+
+    # Draw the graph using the values
+    for i in range(len(values) - 1):
+        pygame.draw.line(screen, BLUE, (i+right_screen_width + 40, HEIGHT - values[i]), (i + right_screen_width + 40, HEIGHT - values[i + 1]), 2)
+
+    # Draw labels for axes
+    font = pygame.font.SysFont("timesnewroman", 20)
+    text = font.render(f"Current Simulations: {steps}", True, BLACK)
+    text_rect = text.get_rect(center=(WIDTH // 2 +50, HEIGHT - 40))
+    screen.blit(text, text_rect)
+    text = font.render("Reliability", True, BLACK)
+    text_rect = text.get_rect(center=(right_screen_width+100, HEIGHT* 1//3 + 20 ))
+    screen.blit(text, text_rect)
+
+    # Draw boxes for current and constant values
+    value_box_height = HEIGHT // 12
+    current_value_rect = pygame.Rect(430, HEIGHT * 1 // 3 - 40-value_box_height, 340, value_box_height)
+    constant_value_rect = pygame.Rect(430, 40, 340, value_box_height)
+    pygame.draw.rect(screen, GRAY, current_value_rect)
+    pygame.draw.rect(screen, GRAY, constant_value_rect)
+
+
+
+    # Draw text for current and constant values
+    font = pygame.font.SysFont("timesnewroman", 22)
+    text = font.render(f"Simulated Reliability: {current_value : .6f}", True, BLACK)
+    screen.blit(text, (430 + 10, HEIGHT * 1 // 3 - 40- value_box_height +10))
+
+
+    text = font.render("1", True, BLACK)
+    screen.blit(text, (right_screen_width + 25, HEIGHT - 300-11))
+
+    text = font.render("0.5", True, BLACK)
+    screen.blit(text, (right_screen_width + 8, HEIGHT - 180-11))
+    
+    text = font.render("0", True, BLACK)
+    screen.blit(text, (right_screen_width + 25, HEIGHT - 45-11))
+
+    
+    if computed_reliability is not None:
+        text = font.render(f"Theoretical Reliability: {computed_reliability : .6f}", True, BLACK)
+        pygame.draw.line(screen, RED, (right_screen_width +40, HEIGHT -  240*computed_reliability - 60), (WIDTH, HEIGHT - 240*computed_reliability - 60), 1)
+    else:
+        text = font.render("Theoretical Reliability: Evaluating", True, BLACK)
+        
+    screen.blit(text, (430 + 10, 40 + 10))
+
+    pygame.display.flip()  # Update the display
+
+def main_loop():
+    global captured_static_rect
+    global pause
+    global steps
+    
+    values = []  
+    steps = 0 
+    current_value = 0
+    clock = pygame.time.Clock()
+    
+    # Main game loop
+    running = True
+    
+    # manager = Manager()
+    # shared_dict = manager.dict()
+    # shared_dict = parameters
+    # myProcess = Process(target = calculate_theoretical_reliability, args = (shared_dict,))
+    # myProcess.start()
+    # task = asyncio.create_task(calculate_theoretical_reliability())
+    
+    # asyncio.run(task)
+    thread = Thread(target = calculate_theoretical_reliability)
+    thread.start()
+    
+    while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                # Check if Pause or Play buttons are clicked
+                if pause_button_rect.collidepoint(event.pos):
+                    pause = True
+                elif play_button_rect.collidepoint(event.pos):
+                    pause = False
+                elif reset_button_rect.collidepoint(event.pos):
+                    # myProcess.terminate()
+                    # task.cancel()
+                    
+                    thread.join()
+                    return -1
 
-        # Get the next value from the generator
-        next_value = next(values_generator)
-        print(next_value)
-        current_value = (current_value*steps + next_value)/(steps+trials)
-        steps += trials
-        values.append(240*current_value + 60)
-        if len(values) > WIDTH:
-            values.pop(0)  # Remove the oldest value if the list is too long
+        if not pause:
+            draw_environment()
+            values_generator = generate_values()
+            
+            # Get the next value from the generator
+            next_value = next(values_generator)
+            
+            current_value = (current_value*steps + next_value)/(steps+trials)
+            steps += trials
+            values.append(240*current_value + 60)
+            
+            if len(values) > WIDTH-right_screen_width-40:
+                values.pop(0)  # Remove the oldest value if the list is too long
 
-        draw_graph(values, current_value, constant_value, horizontal_line_value)
-        clock.tick(30)  # Adjust the FPS as needed
+            draw_graph(values, current_value)
+            clock.tick(30)  # Adjust the FPS as needed
+                
+            pygame.display.flip()
+            # pygame.time.Clock().tick(5)
+                
+# Main loop
+def main():
+    global computed_reliability
+    
+    run = True
+    final_result = -1
+    while run:
+        update_variables()
+        print_variables()
+        if final_result == -1:
+            start = True
+            while start:
+                start = not handle_events_new()
+                draw_ui2()
+                pygame.display.flip()
+
+        computed_reliability = None
+        final_result = main_loop()
 
 if __name__ == "__main__":
     main()
